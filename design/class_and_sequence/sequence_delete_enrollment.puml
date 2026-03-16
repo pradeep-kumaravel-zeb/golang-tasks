@@ -1,0 +1,120 @@
+@startuml DELETE_Delete_Enrollment_Sequence
+title Sequence Diagram - DELETE /enrollments/{id} (Delete Enrollment)
+
+participant "Client" as Client
+participant "pkg/server/server.go" as Server
+participant "internal/handlers/handler.go" as Handler
+participant "internal/service/service.go" as Service
+participant "internal/repository/repository.go" as Repository
+participant "internal/models/model.go" as Models
+participant "Database" as DB
+
+activate Client
+Client -> Server : HTTP DELETE /enrollments/{id}
+activate Server
+Server -> Server : The mux.Router matches the route "/enrollments/{id}" with method DELETE
+Server -> Server : The router identifies the handler function handler.DeleteEnrollment registered for this route
+Server -> Handler : calling the DeleteEnrollment(w http.ResponseWriter, r *http.Request)
+activate Handler
+Handler -> Handler : the DeleteEnrollment(w http.ResponseWriter, r *http.Request) is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
+
+group DeleteEnrollment(w http.ResponseWriter, r *http.Request)
+    Handler -> Handler : Extracting path variables from the request using mux.Vars(r) and storing in variable vars of type map[string]string
+    Handler -> Handler : Extracting the "id" key from vars map and storing in variable id of type string
+    Handler -> Service : calling the DeleteEnrollment(id string)
+    activate Service
+    Service -> Service : the DeleteEnrollment(id string) is getting triggered with the following parameters with type: id string
+
+    group DeleteEnrollment(id string)
+        Service -> Service : Parsing the id string into a uuid.UUID using uuid.Parse(id) and storing in variable enrollmentID of type uuid.UUID and err of type error
+
+        alt err != nil (invalid UUID format)
+            Service --> Handler : Returning errors.New("invalid enrollment ID")
+        end
+
+        Service -> Repository : calling the FetchEnrollmentByID(enrollmentID uuid.UUID)
+        activate Repository
+        Repository -> Repository : the FetchEnrollmentByID(enrollmentID uuid.UUID) is getting triggered with the following parameters with type: enrollmentID uuid.UUID
+
+        group FetchEnrollmentByID(enrollmentID uuid.UUID)
+            Repository -> Repository : Declaring variable enrollment of type models.Enrollment
+            Repository -> DB : Executing r.db.Preload("Student").Preload("Course").First(&enrollment, "id = ?", id) to fetch the enrollment record with preloaded Student and Course associations
+            activate DB
+            DB --> Repository : Returning the enrollment record or error
+            deactivate DB
+
+            alt errors.Is(err, gorm.ErrRecordNotFound)
+                Repository --> Service : Returning nil and errors.New("enrollment not found")
+            else err != nil (other database error)
+                Repository --> Service : Returning nil and the database error
+            else err == nil (record found)
+                Repository --> Service : Returning &enrollment of type *models.Enrollment and nil error
+            end
+        end
+        deactivate Repository
+
+        alt err != nil (repository returned error)
+            Service --> Handler : Returning the error from repository
+        end
+
+        Service -> Service : Checking if enrollment.PaymentStatus equals "paid" to determine if deletion is allowed
+        alt enrollment.PaymentStatus == "paid"
+            Service --> Handler : Returning errors.New("cannot delete enrollment with paid status - refund required first")
+        end
+
+        Service -> Service : Checking if the current time time.Now() is after enrollment.Course.StartDate to determine if the course has already started
+        alt time.Now().After(enrollment.Course.StartDate) is true (course has started)
+            Service --> Handler : Returning errors.New("cannot delete enrollment - course has already started")
+        end
+
+        Service -> Service : All deletion preconditions passed, proceeding to delete the enrollment record
+        Service -> Repository : calling the DeleteEnrollment(enrollmentID uuid.UUID)
+        activate Repository
+        Repository -> Repository : the DeleteEnrollment(id uuid.UUID) is getting triggered with the following parameters with type: id uuid.UUID
+
+        group DeleteEnrollment(id uuid.UUID)
+            Repository -> DB : Executing r.db.Delete(&models.Enrollment{}, "id = ?", id) to soft/hard delete the enrollment record from the database
+            activate DB
+            DB --> Repository : Returning nil error on success or error on failure
+            deactivate DB
+            Repository --> Service : Returning error or nil
+        end
+        deactivate Repository
+
+        Service --> Handler : Returning the result from repository DeleteEnrollment (nil on success, error on failure)
+    end
+
+    deactivate Service
+
+    alt err != nil (service returned error)
+        alt err.Error() == "enrollment not found"
+            Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusNotFound int, err.Error() string, nil)
+            Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 404, Message = "enrollment not found", Data = empty slice, MissingFields = nil
+            Handler -> Handler : Setting response header Content-Type to "application/json"
+            Handler -> Handler : Writing HTTP status code 404 to the response writer using w.WriteHeader()
+            Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+            Handler --> Client : HTTP 404 Not Found with JSON error response body
+        else other error (paid status, course started, or database error)
+            Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusBadRequest int, err.Error() string, nil)
+            Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 400, Message = err.Error(), Data = empty slice, MissingFields = nil
+            Handler -> Handler : Setting response header Content-Type to "application/json"
+            Handler -> Handler : Writing HTTP status code 400 to the response writer using w.WriteHeader()
+            Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+            Handler --> Client : HTTP 400 Bad Request with JSON error response body
+        end
+    else err == nil (enrollment deleted successfully)
+        Handler -> Handler : calling respondWithSuccess(w http.ResponseWriter, http.StatusOK int, "Enrollment deleted successfully" string, nil interface{})
+        Handler -> Handler : the respondWithSuccess function checks if data is nil and replaces it with empty slice []interface{}{}
+        Handler -> Handler : the respondWithSuccess function builds SuccessResponse struct with Status = 200, Message = "Enrollment deleted successfully", Data = empty slice
+        Handler -> Handler : Setting response header Content-Type to "application/json"
+        Handler -> Handler : Writing HTTP status code 200 to the response writer using w.WriteHeader()
+        Handler -> Handler : Encoding the SuccessResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+        Handler --> Client : HTTP 200 OK with JSON response body confirming deletion
+    end
+end
+
+deactivate Handler
+deactivate Server
+deactivate Client
+
+@enduml

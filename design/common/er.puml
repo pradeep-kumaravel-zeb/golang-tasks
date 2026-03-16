@@ -1,0 +1,49 @@
+@startuml er
+
+entity students {
+  * id : UUID <<PK>>
+  --
+  name : VARCHAR
+  email : VARCHAR <<UNIQUE>>
+  created_at : DATETIME
+  updated_at : DATETIME
+  is_active : BOOLEAN
+}
+
+entity courses {
+  * id : UUID <<PK>>
+  --
+  name : VARCHAR
+  fee : DECIMAL
+  start_date : DATE
+  created_at : DATETIME
+  updated_at : DATETIME
+  is_active : BOOLEAN  
+}
+
+entity enrollments {
+  * id : UUID <<PK>>
+  --
+  student_id : INT <<FK>>
+  course_id : INT <<FK>>
+  enrollment_date : DATE
+  fee_paid : DECIMAL
+  payment_status : ENUM(unpaid, partial, paid)
+  created_at : DATETIME
+  updated_at : DATETIME
+  is_active : BOOLEAN  
+}
+
+entity payments {
+  * id : UUID <<PK>>
+  --
+  enrollment_id : INT <<FK>>
+  amount : DECIMAL
+  paid_at : DATETIME
+}
+
+students    ||--o{ enrollments : "enrolls"
+courses     ||--o{ enrollments : "has"
+enrollments ||--o{ payments   : "tracks"
+
+@enduml

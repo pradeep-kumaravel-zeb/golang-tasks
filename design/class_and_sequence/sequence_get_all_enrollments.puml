@@ -1,0 +1,103 @@
+@startuml GET_All_Enrollments_Sequence
+title Sequence Diagram - GET /enrollments (Get All Enrollments)
+
+participant "Client" as Client
+participant "pkg/server/server.go" as Server
+participant "internal/handlers/handler.go" as Handler
+participant "internal/service/service.go" as Service
+participant "internal/repository/repository.go" as Repository
+participant "internal/dto/enrollment_dto.go" as DTO
+participant "internal/models/model.go" as Models
+participant "Database" as DB
+
+activate Client
+Client -> Server : HTTP GET /enrollments?course_name=&payment_status=&student_name=
+activate Server
+Server -> Server : The mux.Router matches the route "/enrollments" with method GET
+Server -> Server : The router identifies the handler function handler.GetAllEnrollments registered for this route
+Server -> Handler : calling the GetAllEnrollments(w http.ResponseWriter, r *http.Request)
+activate Handler
+Handler -> Handler : the GetAllEnrollments(w http.ResponseWriter, r *http.Request) is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
+
+group GetAllEnrollments(w http.ResponseWriter, r *http.Request)
+    Handler -> Handler : Extracting query parameter "course_name" from r.URL.Query().Get("course_name") and storing in variable courseName of type string
+    Handler -> Handler : Extracting query parameter "payment_status" from r.URL.Query().Get("payment_status") and storing in variable paymentStatus of type string
+    Handler -> Handler : Extracting query parameter "student_name" from r.URL.Query().Get("student_name") and storing in variable studentName of type string
+    Handler -> Service : calling the GetEnrollments(courseName string, paymentStatus string, studentName string)
+    activate Service
+    Service -> Service : the GetEnrollments(courseName string, paymentStatus string, studentName string) is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
+
+    group GetEnrollments(courseName string, paymentStatus string, studentName string)
+        Service -> Repository : calling the FetchAllEnrollments(courseName string, paymentStatus string, studentName string)
+        activate Repository
+        Repository -> Repository : the FetchAllEnrollments(courseName string, paymentStatus string, studentName string) is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
+
+        group FetchAllEnrollments(courseName string, paymentStatus string, studentName string)
+            Repository -> Repository : Declaring variable enrollments of type []models.Enrollment as an empty slice
+            Repository -> Repository : Building base query with r.db.Preload("Student").Preload("Course") to eager load Student and Course associations
+
+            alt courseName != ""
+                Repository -> Repository : Appending JOIN clause "JOIN courses ON courses.id = enrollments.course_id" and WHERE clause "courses.name ILIKE %" + courseName + "%" to the query
+            end
+
+            alt paymentStatus != ""
+                Repository -> Repository : Appending WHERE clause "enrollments.payment_status = ?" with paymentStatus to the query
+            end
+
+            alt studentName != ""
+                Repository -> Repository : Appending JOIN clause "JOIN students ON students.id = enrollments.student_id" and WHERE clause "students.name ILIKE %" + studentName + "%" to the query
+            end
+
+            Repository -> DB : Executing query.Find(&enrollments) to fetch all matching enrollment records from the database
+            activate DB
+            DB --> Repository : Returning the result set of enrollment records with preloaded Student and Course data
+            deactivate DB
+
+            alt err != nil (database query failed)
+                Repository --> Service : Returning nil and error from the database query failure
+            else err == nil (query succeeded)
+                Repository --> Service : Returning enrollments []models.Enrollment slice and nil error
+            end
+        end
+
+        deactivate Repository
+
+        alt err != nil (repository returned error)
+            Service --> Handler : Returning nil and the error propagated from repository layer
+        else err == nil (enrollments fetched successfully)
+            Service -> Service : Creating responses variable of type []dto.EnrollmentResponse with length equal to len(enrollments) using make()
+            Service -> Service : Iterating over enrollments slice using for loop with index i and element e of type models.Enrollment
+
+            loop for each enrollment e in enrollments
+                Service -> Service : Mapping enrollment fields to dto.EnrollmentResponse struct: ID = e.ID.String(), StudentName = e.Student.Name, StudentEmail = e.Student.Email, CourseName = e.Course.Name, CourseFee = e.Course.Fee, EnrollmentDate = e.EnrollmentDate, FeePaid = e.FeePaid, PaymentStatus = e.PaymentStatus
+                Service -> Service : Assigning the mapped EnrollmentResponse to responses[i]
+            end
+
+            Service --> Handler : Returning responses []dto.EnrollmentResponse and nil error
+        end
+    end
+
+    deactivate Service
+
+    alt err != nil (service returned error)
+        Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusInternalServerError int, err.Error() string, nil)
+        Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 500, Message = err.Error(), Data = empty slice, MissingFields = nil
+        Handler -> Handler : Setting response header Content-Type to "application/json"
+        Handler -> Handler : Writing HTTP status code 500 to the response writer using w.WriteHeader()
+        Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+        Handler --> Client : HTTP 500 Internal Server Error with JSON error response body
+    else err == nil (enrollments retrieved successfully)
+        Handler -> Handler : calling respondWithSuccess(w http.ResponseWriter, http.StatusOK int, "Enrollments retrieved successfully" string, enrollments interface{})
+        Handler -> Handler : the respondWithSuccess function builds SuccessResponse struct with Status = 200, Message = "Enrollments retrieved successfully", Data = enrollments
+        Handler -> Handler : Setting response header Content-Type to "application/json"
+        Handler -> Handler : Writing HTTP status code 200 to the response writer using w.WriteHeader()
+        Handler -> Handler : Encoding the SuccessResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+        Handler --> Client : HTTP 200 OK with JSON response body containing all enrollment records
+    end
+end
+
+deactivate Handler
+deactivate Server
+deactivate Client
+
+@enduml

@@ -1,0 +1,86 @@
+@startuml class diagram. Get all enrollmenets 
+
+
+class "cmd/main.go" as main {
+    - imports : flag, fmt,os 
+    --
+    + main()
+}
+
+class "pkg/server/server.go" as server {
+    - imports : net/http, mux , cors , zap
+    - file_imports : database, handlers
+    --
+    + InitializeApp() -> Application, error
+}
+
+class "internal/config/config.go" as config {
+    + BuildDBUrl(creds : struct)
+}
+
+class "pkg/database/database.go" as database { 
+    + EstablishPostgresConnection(dburl)
+}
+
+class "internal/handlers/handler.go" as handler {
+    - imports : 	fmt, net/http, os, path/filepath, strings
+    - file_imports : service, repository, utils
+    --
+    + HandlerInterface : interface 
+    + NewHandler() -> HandlerStruct
+    + GetAllEnrollments(enrollment_id:optional)
+    + CreateEnrollment(request)
+    + UpdateEnrollment(request)
+    + PatchEnrollment(request)
+}
+
+class "internal/dto/enrollment_dto.go" as enrollment_dto { 
+    + CreateEnrollments
+    + GetEnrollments
+    + UpdateEnrollments 
+    + PatchEnrollments 
+    + GetEnrollmentsByID
+}
+
+class "internal/service/service.go" as service {
+    + CreateEnrollments
+    + GetEnrollments
+    + UpdateEnrollments 
+    + PatchEnrollments 
+    + GetEnrollmentsByID    
+}
+
+class "internal/models/model.go" as model {
+    -- refer ER diagram 
+}
+
+class "internal/Repository/repository.go" as repo {
+    + FetchAllEnrollments()
+    + FetchEnrollmentsByID()
+    + CreateEnrollment()
+    + UpdateEnrollment()
+    + PatchEnrollment() 
+}
+
+class "internal/Uitls/utils.go" as utils {
+    + ValidateEmail()
+    + ValidateName()
+    + ValidateText()
+}
+
+
+main ..> server 
+server ..> config
+server ..> database 
+server ..> handler 
+handler ..> service
+handler ..> enrollment_dto
+enrollment_dto ..> utils 
+service ..> model  
+service ..> repo 
+
+
+
+
+
+@enduml 

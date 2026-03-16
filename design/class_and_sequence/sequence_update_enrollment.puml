@@ -1,0 +1,273 @@
+@startuml PUT_Update_Enrollment_Sequence
+title Sequence Diagram - PUT /enrollments/{id} (Update Enrollment)
+
+participant "Client" as Client
+participant "pkg/server/server.go" as Server
+participant "internal/handlers/handler.go" as Handler
+participant "internal/service/service.go" as Service
+participant "internal/utils/utils.go" as Utils
+participant "internal/repository/repository.go" as Repository
+participant "internal/models/model.go" as Models
+participant "internal/dto/enrollment_dto.go" as DTO
+participant "Database" as DB
+
+activate Client
+Client -> Server : HTTP PUT /enrollments/{id} with JSON body {student_name, student_email, course_name, fee_paid}
+activate Server
+Server -> Server : The mux.Router matches the route "/enrollments/{id}" with method PUT
+Server -> Server : The router identifies the handler function handler.UpdateEnrollment registered for this route
+Server -> Handler : calling the UpdateEnrollment(w http.ResponseWriter, r *http.Request)
+activate Handler
+Handler -> Handler : the UpdateEnrollment(w http.ResponseWriter, r *http.Request) is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
+
+group UpdateEnrollment(w http.ResponseWriter, r *http.Request)
+    Handler -> Handler : Extracting path variables from the request using mux.Vars(r) and storing in variable vars of type map[string]string
+    Handler -> Handler : Extracting the "id" key from vars map and storing in variable id of type string
+    Handler -> Handler : Declaring variable req of type dto.UpdateEnrollmentRequest
+    Handler -> Handler : Attempting to decode the request body JSON into req using json.NewDecoder(r.Body).Decode(&req)
+
+    alt err != nil (JSON decode failed)
+        Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusBadRequest int, "invalid request body" string, nil)
+        Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 400, Message = "invalid request body", Data = empty slice, MissingFields = nil
+        Handler -> Handler : Setting response header Content-Type to "application/json"
+        Handler -> Handler : Writing HTTP status code 400 to the response writer using w.WriteHeader()
+        Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+        Handler --> Client : HTTP 400 Bad Request with JSON error response body
+    else err == nil (JSON decoded successfully)
+        Handler -> Service : calling the UpdateEnrollment(id string, req dto.UpdateEnrollmentRequest)
+        activate Service
+        Service -> Service : the UpdateEnrollment(id string, req dto.UpdateEnrollmentRequest) is getting triggered with the following parameters with type: id string, req dto.UpdateEnrollmentRequest containing fields StudentName string, StudentEmail string, CourseName string, FeePaid float64
+
+        group UpdateEnrollment(id string, req dto.UpdateEnrollmentRequest)
+            Service -> Service : Parsing the id string into a uuid.UUID using uuid.Parse(id) and storing in variable enrollmentID of type uuid.UUID and err of type error
+
+            alt err != nil (invalid UUID format)
+                Service --> Handler : Returning nil and errors.New("invalid enrollment ID")
+            end
+
+            Service -> Repository : calling the FetchEnrollmentByID(enrollmentID uuid.UUID)
+            activate Repository
+            Repository -> Repository : the FetchEnrollmentByID(enrollmentID uuid.UUID) is getting triggered with the following parameters with type: enrollmentID uuid.UUID
+
+            group FetchEnrollmentByID(enrollmentID uuid.UUID)
+                Repository -> Repository : Declaring variable enrollment of type models.Enrollment
+                Repository -> DB : Executing r.db.Preload("Student").Preload("Course").First(&enrollment, "id = ?", id) to fetch the enrollment record with preloaded associations
+                activate DB
+                DB --> Repository : Returning the enrollment record or error
+                deactivate DB
+
+                alt errors.Is(err, gorm.ErrRecordNotFound)
+                    Repository --> Service : Returning nil and errors.New("enrollment not found")
+                else err != nil (other database error)
+                    Repository --> Service : Returning nil and the database error
+                else err == nil (record found)
+                    Repository --> Service : Returning &enrollment of type *models.Enrollment and nil error
+                end
+            end
+            deactivate Repository
+
+            alt err != nil (repository returned error)
+                Service --> Handler : Returning nil and the error from repository
+            end
+
+            Service -> Utils : calling the ValidateEmail(req.StudentEmail string)
+            activate Utils
+            Utils -> Utils : the ValidateEmail(email string) is getting triggered with the following parameters with type: email string
+            Utils -> Utils : Compiling regex pattern and matching the email string against it
+            Utils --> Service : Returning bool result of the regex match
+            deactivate Utils
+
+            alt ValidateEmail returned false
+                Service --> Handler : Returning nil and errors.New("invalid email format")
+            end
+
+            Service -> Utils : calling the ValidateName(req.StudentName string)
+            activate Utils
+            Utils -> Utils : the ValidateName(name string) is getting triggered with the following parameters with type: name string
+            Utils -> Utils : Trimming whitespace from name using strings.TrimSpace(name) and checking if length > 0
+            Utils --> Service : Returning bool result of the length check
+            deactivate Utils
+
+            alt ValidateName returned false
+                Service --> Handler : Returning nil and errors.New("student name is required")
+            end
+
+            Service -> Utils : calling the ValidateText(req.CourseName string)
+            activate Utils
+            Utils -> Utils : the ValidateText(text string) is getting triggered with the following parameters with type: text string
+            Utils -> Utils : Trimming whitespace from text using strings.TrimSpace(text) and checking if length > 0
+            Utils --> Service : Returning bool result of the length check
+            deactivate Utils
+
+            alt ValidateText returned false
+                Service --> Handler : Returning nil and errors.New("course name is required")
+            end
+
+            Service -> Service : All validations passed, proceeding to find or create student
+            Service -> Repository : calling the FindStudentByEmail(req.StudentEmail string)
+            activate Repository
+            Repository -> Repository : the FindStudentByEmail(email string) is getting triggered with the following parameters with type: email string
+
+            group FindStudentByEmail(email string)
+                Repository -> Repository : Declaring variable student of type models.Student
+                Repository -> DB : Executing r.db.Where("email = ?", email).First(&student) to find student by email
+                activate DB
+                DB --> Repository : Returning the student record or gorm.ErrRecordNotFound
+                deactivate DB
+
+                alt errors.Is(err, gorm.ErrRecordNotFound)
+                    Repository --> Service : Returning nil *models.Student and nil error (student does not exist)
+                else err != nil (other database error)
+                    Repository --> Service : Returning nil and the database error
+                else err == nil (student found)
+                    Repository --> Service : Returning &student of type *models.Student and nil error
+                end
+            end
+            deactivate Repository
+
+            alt err != nil (repository returned error)
+                Service --> Handler : Returning nil and the error from repository
+            end
+
+            alt student == nil (student does not exist)
+                Service -> Service : Creating new models.Student struct with Name = req.StudentName and Email = req.StudentEmail
+                Service -> Repository : calling the CreateStudent(student *models.Student)
+                activate Repository
+                Repository -> Repository : the CreateStudent(student *models.Student) is getting triggered with the following parameters with type: student *models.Student
+
+                group CreateStudent(student *models.Student)
+                    Repository -> DB : Executing r.db.Create(student) to insert the new student record into the database
+                    activate DB
+                    DB --> Repository : Returning nil error on success or error on failure
+                    deactivate DB
+                    Repository --> Service : Returning error or nil
+                end
+                deactivate Repository
+
+                alt err != nil (create student failed)
+                    Service --> Handler : Returning nil and the error from CreateStudent
+                end
+            else student != nil and student.Name != req.StudentName (name differs)
+                Service -> Service : Updating student.Name to req.StudentName
+                Service -> Repository : calling the UpdateStudent(student *models.Student)
+                activate Repository
+                Repository -> Repository : the UpdateStudent(student *models.Student) is getting triggered with the following parameters with type: student *models.Student
+
+                group UpdateStudent(student *models.Student)
+                    Repository -> DB : Executing r.db.Save(student) to update the student record in the database
+                    activate DB
+                    DB --> Repository : Returning nil error on success or error on failure
+                    deactivate DB
+                    Repository --> Service : Returning error or nil
+                end
+                deactivate Repository
+
+                alt err != nil (update student failed)
+                    Service --> Handler : Returning nil and the error from UpdateStudent
+                end
+            end
+
+            Service -> Service : Proceeding to find the course by name
+            Service -> Repository : calling the FindCourseByName(req.CourseName string)
+            activate Repository
+            Repository -> Repository : the FindCourseByName(name string) is getting triggered with the following parameters with type: name string
+
+            group FindCourseByName(name string)
+                Repository -> Repository : Declaring variable course of type models.Course
+                Repository -> DB : Executing r.db.Where("name = ?", name).First(&course) to find course by name
+                activate DB
+                DB --> Repository : Returning the course record or gorm.ErrRecordNotFound
+                deactivate DB
+
+                alt errors.Is(err, gorm.ErrRecordNotFound)
+                    Repository --> Service : Returning nil *models.Course and nil error (course does not exist)
+                else err != nil (other database error)
+                    Repository --> Service : Returning nil and the database error
+                else err == nil (course found)
+                    Repository --> Service : Returning &course of type *models.Course and nil error
+                end
+            end
+            deactivate Repository
+
+            alt err != nil (repository returned error)
+                Service --> Handler : Returning nil and the error from repository
+            end
+
+            alt course == nil (course not found)
+                Service --> Handler : Returning nil and errors.New("course not found")
+            end
+
+            Service -> Service : Updating enrollment fields: enrollment.StudentID = student.ID, enrollment.CourseID = course.ID, enrollment.FeePaid = req.FeePaid
+            Service -> Utils : calling the CalculatePaymentStatus(req.FeePaid float64, course.Fee float64)
+            activate Utils
+            Utils -> Utils : the CalculatePaymentStatus(feePaid float64, courseFee float64) is getting triggered with the following parameters with type: feePaid float64, courseFee float64
+
+            group CalculatePaymentStatus(feePaid float64, courseFee float64)
+                alt feePaid == 0
+                    Utils -> Utils : Payment status determined as "unpaid"
+                else feePaid < courseFee
+                    Utils -> Utils : Payment status determined as "partial"
+                else feePaid >= courseFee
+                    Utils -> Utils : Payment status determined as "paid"
+                end
+            end
+
+            Utils --> Service : Returning paymentStatus of type string
+            deactivate Utils
+
+            Service -> Service : Setting enrollment.PaymentStatus = paymentStatus
+            Service -> Repository : calling the UpdateEnrollment(enrollment *models.Enrollment)
+            activate Repository
+            Repository -> Repository : the UpdateEnrollment(enrollment *models.Enrollment) is getting triggered with the following parameters with type: enrollment *models.Enrollment
+
+            group UpdateEnrollment(enrollment *models.Enrollment)
+                Repository -> DB : Executing r.db.Save(enrollment) to update the enrollment record in the database
+                activate DB
+                DB --> Repository : Returning nil error on success or error on failure
+                deactivate DB
+                Repository --> Service : Returning error or nil
+            end
+            deactivate Repository
+
+            alt err != nil (update enrollment failed)
+                Service --> Handler : Returning nil and the error from UpdateEnrollment
+            end
+
+            Service -> Service : Building dto.EnrollmentResponse struct with fields: ID = enrollment.ID.String(), StudentName = student.Name, StudentEmail = student.Email, CourseName = course.Name, CourseFee = course.Fee, EnrollmentDate = enrollment.EnrollmentDate, FeePaid = enrollment.FeePaid, PaymentStatus = enrollment.PaymentStatus
+            Service --> Handler : Returning &dto.EnrollmentResponse and nil error
+        end
+
+        deactivate Service
+
+        alt err != nil (service returned error)
+            alt err.Error() == "enrollment not found"
+                Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusNotFound int, err.Error() string, nil)
+                Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 404, Message = "enrollment not found", Data = empty slice
+                Handler -> Handler : Setting response header Content-Type to "application/json"
+                Handler -> Handler : Writing HTTP status code 404 to the response writer using w.WriteHeader()
+                Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+                Handler --> Client : HTTP 404 Not Found with JSON error response body
+            else other error
+                Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusBadRequest int, err.Error() string, nil)
+                Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 400, Message = err.Error(), Data = empty slice
+                Handler -> Handler : Setting response header Content-Type to "application/json"
+                Handler -> Handler : Writing HTTP status code 400 to the response writer using w.WriteHeader()
+                Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+                Handler --> Client : HTTP 400 Bad Request with JSON error response body
+            end
+        else err == nil (enrollment updated successfully)
+            Handler -> Handler : calling respondWithSuccess(w http.ResponseWriter, http.StatusOK int, "Enrollment updated successfully" string, enrollment interface{})
+            Handler -> Handler : the respondWithSuccess function builds SuccessResponse struct with Status = 200, Message = "Enrollment updated successfully", Data = enrollment
+            Handler -> Handler : Setting response header Content-Type to "application/json"
+            Handler -> Handler : Writing HTTP status code 200 to the response writer using w.WriteHeader()
+            Handler -> Handler : Encoding the SuccessResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
+            Handler --> Client : HTTP 200 OK with JSON response body containing the updated enrollment record
+        end
+    end
+end
+
+deactivate Handler
+deactivate Server
+deactivate Client
+
+@enduml
