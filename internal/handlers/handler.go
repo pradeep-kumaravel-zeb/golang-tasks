@@ -33,11 +33,11 @@ func (h *handler) GetAllEnrollments(w http.ResponseWriter, r *http.Request) {
 
 	enrollments, err := h.service.GetEnrollments(courseName, paymentStatus, studentName)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		respondWithError(w, http.StatusInternalServerError, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, enrollments)
+	respondWithSuccess(w, http.StatusOK, "Enrollments retrieved successfully", enrollments)
 }
 
 func (h *handler) GetEnrollmentByID(w http.ResponseWriter, r *http.Request) {
@@ -47,30 +47,30 @@ func (h *handler) GetEnrollmentByID(w http.ResponseWriter, r *http.Request) {
 	enrollment, err := h.service.GetEnrollmentByID(id)
 	if err != nil {
 		if err.Error() == "enrollment not found" {
-			respondWithError(w, http.StatusNotFound, err.Error())
+			respondWithError(w, http.StatusNotFound, err.Error(), nil)
 			return
 		}
-		respondWithError(w, http.StatusBadRequest, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, enrollment)
+	respondWithSuccess(w, http.StatusOK, "Enrollment retrieved successfully", enrollment)
 }
 
 func (h *handler) CreateEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req dto.CreateEnrollmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "invalid request body")
+		respondWithError(w, http.StatusBadRequest, "invalid request body", nil)
 		return
 	}
 
 	enrollment, err := h.service.CreateEnrollment(req)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, enrollment)
+	respondWithSuccess(w, http.StatusCreated, "Enrollment created successfully", enrollment)
 }
 
 func (h *handler) UpdateEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -79,21 +79,21 @@ func (h *handler) UpdateEnrollment(w http.ResponseWriter, r *http.Request) {
 
 	var req dto.UpdateEnrollmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "invalid request body")
+		respondWithError(w, http.StatusBadRequest, "invalid request body", nil)
 		return
 	}
 
 	enrollment, err := h.service.UpdateEnrollment(id, req)
 	if err != nil {
 		if err.Error() == "enrollment not found" {
-			respondWithError(w, http.StatusNotFound, err.Error())
+			respondWithError(w, http.StatusNotFound, err.Error(), nil)
 			return
 		}
-		respondWithError(w, http.StatusBadRequest, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, enrollment)
+	respondWithSuccess(w, http.StatusOK, "Enrollment updated successfully", enrollment)
 }
 
 func (h *handler) PatchEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -102,21 +102,21 @@ func (h *handler) PatchEnrollment(w http.ResponseWriter, r *http.Request) {
 
 	var req dto.PatchEnrollmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "invalid request body")
+		respondWithError(w, http.StatusBadRequest, "invalid request body", nil)
 		return
 	}
 
 	enrollment, err := h.service.PatchEnrollment(id, req)
 	if err != nil {
 		if err.Error() == "enrollment not found" {
-			respondWithError(w, http.StatusNotFound, err.Error())
+			respondWithError(w, http.StatusNotFound, err.Error(), nil)
 			return
 		}
-		respondWithError(w, http.StatusBadRequest, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, enrollment)
+	respondWithSuccess(w, http.StatusOK, "Enrollment patched successfully", enrollment)
 }
 
 func (h *handler) DeleteEnrollment(w http.ResponseWriter, r *http.Request) {
@@ -126,23 +126,51 @@ func (h *handler) DeleteEnrollment(w http.ResponseWriter, r *http.Request) {
 	err := h.service.DeleteEnrollment(id)
 	if err != nil {
 		if err.Error() == "enrollment not found" {
-			respondWithError(w, http.StatusNotFound, err.Error())
+			respondWithError(w, http.StatusNotFound, err.Error(), nil)
 			return
 		}
-		respondWithError(w, http.StatusBadRequest, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, map[string]string{"message": "enrollment deleted successfully"})
+	respondWithSuccess(w, http.StatusOK, "Enrollment deleted successfully", nil)
 }
 
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, _ := json.Marshal(payload)
+type SuccessResponse struct {
+	Status  int         `json:"status"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
+}
+
+type ErrorResponse struct {
+	Status        int                 `json:"status"`
+	Message       string              `json:"message"`
+	Data          []interface{}       `json:"data"`
+	MissingFields []map[string]string `json:"missingFields,omitempty"`
+}
+
+func respondWithSuccess(w http.ResponseWriter, code int, message string, data interface{}) {
+	if data == nil {
+		data = []interface{}{}
+	}
+	response := SuccessResponse{
+		Status:  code,
+		Message: message,
+		Data:    data,
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	w.Write(response)
+	json.NewEncoder(w).Encode(response)
 }
 
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	respondWithJSON(w, code, map[string]string{"error": message})
+func respondWithError(w http.ResponseWriter, code int, message string, missingFields []map[string]string) {
+	response := ErrorResponse{
+		Status:        code,
+		Message:       message,
+		Data:          []interface{}{},
+		MissingFields: missingFields,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(response)
 }

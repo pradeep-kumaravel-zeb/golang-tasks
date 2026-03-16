@@ -21,7 +21,7 @@ type Application struct {
 	db     *gorm.DB
 }
 
-func InitializeApp(host, port, user, password, dbname, schema string) (*Application, error) {
+func InitializeApp(creds *config.DBCredentials) (*Application, error) {
 	// Initialize logger
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -29,16 +29,7 @@ func InitializeApp(host, port, user, password, dbname, schema string) (*Applicat
 	}
 
 	// Build database URL
-	creds := config.DBCredentials{
-		Host:     host,
-		Port:     port,
-		User:     user,
-		Password: password,
-		DBName:   dbname,
-		Schema:   schema,
-		SSLMode:  "disable",
-	}
-	dbURL := config.BuildDBUrl(creds)
+	dbURL := config.BuildDBUrl(*creds)
 
 	// Establish database connection
 	db, err := database.EstablishPostgresConnection(dbURL)

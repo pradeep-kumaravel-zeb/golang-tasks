@@ -1,22 +1,21 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"student-enrollment/internal/config"
 	"student-enrollment/pkg/server"
 )
 
 func main() {
-	host := flag.String("host", "localhost", "Database host")
-	port := flag.String("port", "5432", "Database port")
-	user := flag.String("user", "postgres", "Database user")
-	password := flag.String("password", "root", "Database password")
-	dbname := flag.String("dbname", "postgres", "Database name")
-	schema := flag.String("schema", "public", "Database schema")
-	flag.Parse()
+	// Load config from .env
+	creds, err := config.LoadConfig()
+	if err != nil {
+		fmt.Printf("Failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
 
-	app, err := server.InitializeApp(*host, *port, *user, *password, *dbname, *schema)
+	app, err := server.InitializeApp(creds)
 	if err != nil {
 		fmt.Printf("Failed to initialize application: %v\n", err)
 		os.Exit(1)
