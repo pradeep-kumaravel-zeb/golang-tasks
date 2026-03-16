@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-	// Load config from .env
 	creds, err := config.LoadConfig()
 	if err != nil {
 		fmt.Printf("Failed to load configuration: %v\n", err)

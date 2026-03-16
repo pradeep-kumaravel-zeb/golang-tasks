@@ -19,11 +19,25 @@ type DBCredentials struct {
 }
 
 func LoadConfig() (*DBCredentials, error) {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	// Try to load .env file from multiple locations
+	envPaths := []string{
+		".env",                    
+		"../.env",                  // Parent directory (if running from cmd/)
 	}
 
+	loaded := false
+	for _, path := range envPaths {
+		if err := godotenv.Load(path); err == nil {
+			log.Printf("Loaded .env from: %s", path)
+			loaded = true
+			break
+		}
+	}
+
+	if !loaded {
+		log.Println("No .env file found, using environment variables")
+	}
+	// For testing purpose, the values are hardcoded here.
 	creds := &DBCredentials{
 		Host:     getEnv("DB_HOST", "localhost"),
 		Port:     getEnv("DB_PORT", "5432"),
