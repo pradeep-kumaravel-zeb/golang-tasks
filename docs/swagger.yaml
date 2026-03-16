@@ -1,0 +1,661 @@
+openapi: 3.0.3
+info:
+  title: Student Enrollment API
+  description: REST API for managing student enrollments in courses, including payment tracking and status management.
+  version: 1.0.0
+  contact:
+    name: Student Enrollment Team
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /enrollments:
+    get:
+      summary: Get all enrollments
+      description: Retrieves all enrollments with optional filtering by course name, payment status, and student name. Filters use case-insensitive partial matching for names and exact matching for payment status.
+      operationId: getAllEnrollments
+      tags:
+        - Enrollments
+      parameters:
+        - name: course_name
+          in: query
+          required: false
+          description: Filter by course name (case-insensitive partial match using ILIKE)
+          schema:
+            type: string
+          example: "Mathematics"
+        - name: payment_status
+          in: query
+          required: false
+          description: Filter by exact payment status
+          schema:
+            type: string
+            enum:
+              - paid
+              - partial
+              - unpaid
+          example: "paid"
+        - name: student_name
+          in: query
+          required: false
+          description: Filter by student name (case-insensitive partial match using ILIKE)
+          schema:
+            type: string
+          example: "John"
+      responses:
+        "200":
+          description: Enrollments retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EnrollmentResponse"
+              example:
+                status: 200
+                message: "Enrollments retrieved successfully"
+                data:
+                  - id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    student_name: "John Doe"
+                    student_email: "john@example.com"
+                    course_name: "Mathematics"
+                    course_fee: 5000.00
+                    enrollment_date: "2026-03-15T10:30:00Z"
+                    fee_paid: 5000.00
+                    payment_status: "paid"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 500
+                message: "database connection error"
+                data: []
+
+    post:
+      summary: Create a new enrollment
+      description: |
+        Creates a new enrollment for a student in a course. Business logic:
+        - Validates email format using regex pattern
+        - Validates student name and course name are not empty/whitespace
+        - Finds existing student by email or creates a new one
+        - If student exists but name differs, updates the student name
+        - Course must already exist in the system
+        - Payment status is auto-calculated: "unpaid" (fee_paid = 0), "partial" (fee_paid < course_fee), "paid" (fee_paid >= course_fee)
+      operationId: createEnrollment
+      tags:
+        - Enrollments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnrollmentRequest"
+            example:
+              student_name: "John Doe"
+              student_email: "john@example.com"
+              course_name: "Mathematics"
+              fee_paid: 2500.00
+      responses:
+        "201":
+          description: Enrollment created successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EnrollmentResponse"
+              example:
+                status: 201
+                message: "Enrollment created successfully"
+                data:
+                  id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  student_name: "John Doe"
+                  student_email: "john@example.com"
+                  course_name: "Mathematics"
+                  course_fee: 5000.00
+                  enrollment_date: "2026-03-16T10:30:00Z"
+                  fee_paid: 2500.00
+                  payment_status: "partial"
+        "400":
+          description: Bad request — validation failed or course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_email:
+                  summary: Invalid email format
+                  value:
+                    status: 400
+                    message: "invalid email format"
+                    data: []
+                missing_name:
+                  summary: Student name is required
+                  value:
+                    status: 400
+                    message: "student name is required"
+                    data: []
+                missing_course:
+                  summary: Course name is required
+                  value:
+                    status: 400
+                    message: "course name is required"
+                    data: []
+                course_not_found:
+                  summary: Course does not exist
+                  value:
+                    status: 400
+                    message: "course not found - please create the course first"
+                    data: []
+                invalid_body:
+                  summary: Invalid request body
+                  value:
+                    status: 400
+                    message: "invalid request body"
+                    data: []
+
+  /enrollments/{id}:
+    get:
+      summary: Get enrollment by ID
+      description: Retrieves a single enrollment by its UUID. Returns the enrollment with associated student and course details.
+      operationId: getEnrollmentByID
+      tags:
+        - Enrollments
+      parameters:
+        - $ref: "#/components/parameters/EnrollmentId"
+      responses:
+        "200":
+          description: Enrollment retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EnrollmentResponse"
+              example:
+                status: 200
+                message: "Enrollment retrieved successfully"
+                data:
+                  id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  student_name: "John Doe"
+                  student_email: "john@example.com"
+                  course_name: "Mathematics"
+                  course_fee: 5000.00
+                  enrollment_date: "2026-03-15T10:30:00Z"
+                  fee_paid: 5000.00
+                  payment_status: "paid"
+        "400":
+          description: Bad request — invalid UUID format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 400
+                message: "invalid enrollment ID"
+                data: []
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 404
+                message: "enrollment not found"
+                data: []
+
+    put:
+      summary: Update enrollment (full replacement)
+      description: |
+        Fully updates an enrollment by ID. All fields are required. Business logic:
+        - Validates email format, student name, and course name
+        - Finds existing student by email or creates a new one
+        - If student exists but name differs, updates the student name
+        - Course must already exist in the system
+        - Payment status is recalculated based on new fee_paid and course fee
+      operationId: updateEnrollment
+      tags:
+        - Enrollments
+      parameters:
+        - $ref: "#/components/parameters/EnrollmentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEnrollmentRequest"
+            example:
+              student_name: "John Doe"
+              student_email: "john@example.com"
+              course_name: "Physics"
+              fee_paid: 3000.00
+      responses:
+        "200":
+          description: Enrollment updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EnrollmentResponse"
+              example:
+                status: 200
+                message: "Enrollment updated successfully"
+                data:
+                  id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  student_name: "John Doe"
+                  student_email: "john@example.com"
+                  course_name: "Physics"
+                  course_fee: 6000.00
+                  enrollment_date: "2026-03-15T10:30:00Z"
+                  fee_paid: 3000.00
+                  payment_status: "partial"
+        "400":
+          description: Bad request — validation failed, invalid UUID, or course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_id:
+                  summary: Invalid enrollment ID
+                  value:
+                    status: 400
+                    message: "invalid enrollment ID"
+                    data: []
+                invalid_email:
+                  summary: Invalid email format
+                  value:
+                    status: 400
+                    message: "invalid email format"
+                    data: []
+                missing_name:
+                  summary: Student name is required
+                  value:
+                    status: 400
+                    message: "student name is required"
+                    data: []
+                course_not_found:
+                  summary: Course not found
+                  value:
+                    status: 400
+                    message: "course not found"
+                    data: []
+                invalid_body:
+                  summary: Invalid request body
+                  value:
+                    status: 400
+                    message: "invalid request body"
+                    data: []
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 404
+                message: "enrollment not found"
+                data: []
+
+    patch:
+      summary: Patch enrollment (partial update)
+      description: |
+        Partially updates an enrollment by ID. All fields are optional (pointer-based). Business logic:
+        - If student_email is provided: validates format, checks for uniqueness across students, updates student email
+        - If student_name is provided: validates not empty, updates student name
+        - If course_name is provided: validates not empty, looks up course (must exist), updates enrollment course
+        - If fee_paid is provided: updates the fee paid amount
+        - Payment status is always recalculated after all patches are applied
+      operationId: patchEnrollment
+      tags:
+        - Enrollments
+      parameters:
+        - $ref: "#/components/parameters/EnrollmentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchEnrollmentRequest"
+            example:
+              fee_paid: 5000.00
+      responses:
+        "200":
+          description: Enrollment patched successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EnrollmentResponse"
+              example:
+                status: 200
+                message: "Enrollment patched successfully"
+                data:
+                  id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  student_name: "John Doe"
+                  student_email: "john@example.com"
+                  course_name: "Mathematics"
+                  course_fee: 5000.00
+                  enrollment_date: "2026-03-15T10:30:00Z"
+                  fee_paid: 5000.00
+                  payment_status: "paid"
+        "400":
+          description: Bad request — validation failed, invalid UUID, email conflict, or course not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_id:
+                  summary: Invalid enrollment ID
+                  value:
+                    status: 400
+                    message: "invalid enrollment ID"
+                    data: []
+                invalid_email:
+                  summary: Invalid email format
+                  value:
+                    status: 400
+                    message: "invalid email format"
+                    data: []
+                email_conflict:
+                  summary: Email already exists for another student
+                  value:
+                    status: 400
+                    message: "email already exists for another student"
+                    data: []
+                empty_name:
+                  summary: Student name cannot be empty
+                  value:
+                    status: 400
+                    message: "student name cannot be empty"
+                    data: []
+                empty_course:
+                  summary: Course name cannot be empty
+                  value:
+                    status: 400
+                    message: "course name cannot be empty"
+                    data: []
+                course_not_found:
+                  summary: Course not found
+                  value:
+                    status: 400
+                    message: "course not found"
+                    data: []
+                invalid_body:
+                  summary: Invalid request body
+                  value:
+                    status: 400
+                    message: "invalid request body"
+                    data: []
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 404
+                message: "enrollment not found"
+                data: []
+
+    delete:
+      summary: Delete enrollment
+      description: |
+        Deletes an enrollment by ID. Business rules enforced before deletion:
+        - Cannot delete if payment_status is "paid" (refund required first)
+        - Cannot delete if the course has already started (time.Now() is after course start_date)
+      operationId: deleteEnrollment
+      tags:
+        - Enrollments
+      parameters:
+        - $ref: "#/components/parameters/EnrollmentId"
+      responses:
+        "200":
+          description: Enrollment deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                status: 200
+                message: "Enrollment deleted successfully"
+                data: []
+        "400":
+          description: Bad request — invalid UUID, paid status, or course already started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_id:
+                  summary: Invalid enrollment ID
+                  value:
+                    status: 400
+                    message: "invalid enrollment ID"
+                    data: []
+                paid_status:
+                  summary: Cannot delete paid enrollment
+                  value:
+                    status: 400
+                    message: "cannot delete enrollment with paid status - refund required first"
+                    data: []
+                course_started:
+                  summary: Course has already started
+                  value:
+                    status: 400
+                    message: "cannot delete enrollment - course has already started"
+                    data: []
+        "404":
+          description: Enrollment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                status: 404
+                message: "enrollment not found"
+                data: []
+
+components:
+  parameters:
+    EnrollmentId:
+      name: id
+      in: path
+      required: true
+      description: Enrollment UUID (format 8-4-4-4-12 hex characters)
+      schema:
+        type: string
+        format: uuid
+      example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+  schemas:
+    CreateEnrollmentRequest:
+      type: object
+      required:
+        - student_name
+        - student_email
+        - course_name
+        - fee_paid
+      properties:
+        student_name:
+          type: string
+          description: Name of the student (cannot be empty or whitespace-only)
+          example: "John Doe"
+        student_email:
+          type: string
+          format: email
+          description: Email of the student (validated against regex ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$)
+          example: "john@example.com"
+        course_name:
+          type: string
+          description: Name of the course to enroll in (must already exist in the system)
+          example: "Mathematics"
+        fee_paid:
+          type: number
+          format: double
+          description: Amount of fee paid at enrollment time
+          example: 2500.00
+
+    UpdateEnrollmentRequest:
+      type: object
+      required:
+        - student_name
+        - student_email
+        - course_name
+        - fee_paid
+      properties:
+        student_name:
+          type: string
+          description: Name of the student (cannot be empty or whitespace-only)
+          example: "John Doe"
+        student_email:
+          type: string
+          format: email
+          description: Email of the student (validated against regex)
+          example: "john@example.com"
+        course_name:
+          type: string
+          description: Name of the course (must already exist)
+          example: "Physics"
+        fee_paid:
+          type: number
+          format: double
+          description: Updated fee paid amount
+          example: 3000.00
+
+    PatchEnrollmentRequest:
+      type: object
+      description: All fields are optional. Only provided fields will be updated.
+      properties:
+        student_name:
+          type: string
+          nullable: true
+          description: Updated student name (cannot be empty if provided)
+          example: "Jane Doe"
+        student_email:
+          type: string
+          format: email
+          nullable: true
+          description: Updated student email (validated, must be unique across students)
+          example: "jane@example.com"
+        course_name:
+          type: string
+          nullable: true
+          description: Updated course name (must exist if provided)
+          example: "Chemistry"
+        fee_paid:
+          type: number
+          format: double
+          nullable: true
+          description: Updated fee paid amount
+          example: 4000.00
+
+    EnrollmentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Enrollment UUID
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        student_name:
+          type: string
+          description: Name of the enrolled student
+          example: "John Doe"
+        student_email:
+          type: string
+          format: email
+          description: Email of the enrolled student
+          example: "john@example.com"
+        course_name:
+          type: string
+          description: Name of the enrolled course
+          example: "Mathematics"
+        course_fee:
+          type: number
+          format: double
+          description: Total fee for the course
+          example: 5000.00
+        enrollment_date:
+          type: string
+          format: date-time
+          description: Date and time of enrollment
+          example: "2026-03-15T10:30:00Z"
+        fee_paid:
+          type: number
+          format: double
+          description: Amount of fee paid so far
+          example: 5000.00
+        payment_status:
+          type: string
+          enum:
+            - paid
+            - partial
+            - unpaid
+          description: "Auto-calculated: unpaid (fee_paid=0), partial (fee_paid < course_fee), paid (fee_paid >= course_fee)"
+          example: "paid"
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          description: HTTP status code
+          example: 200
+        message:
+          type: string
+          description: Success message
+          example: "Operation successful"
+        data:
+          description: Response payload (object, array, or empty array)
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        message:
+          type: string
+          description: Error message
+          example: "invalid request"
+        data:
+          type: array
+          items: {}
+          description: Always an empty array for error responses
+          example: []
+        missingFields:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties:
+              type: string
+          description: Optional list of missing field details

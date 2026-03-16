@@ -6,93 +6,92 @@ participant "pkg/server/server.go" as Server
 participant "internal/handlers/handler.go" as Handler
 participant "internal/service/service.go" as Service
 participant "internal/repository/repository.go" as Repository
-participant "internal/dto/enrollment_dto.go" as DTO
-participant "internal/models/model.go" as Models
 participant "Database" as DB
 
 activate Client
 Client -> Server : HTTP GET /enrollments?course_name=&payment_status=&student_name=
 activate Server
-Server -> Server : The mux.Router matches the route "/enrollments" with method GET
-Server -> Server : The router identifies the handler function handler.GetAllEnrollments registered for this route
+
+group Constructor Initialization Chain
+    Server -> Server : Building dbURL using config.BuildDBUrl(*creds) and establishing DB connection via database.EstablishPostgresConnection(dbURL)
+    Server -> Repository : calling the NewRepository(db *gorm.DB) — initializing repository struct with db dependency
+    activate Repository
+    Repository -> Repository : the NewRepository() is getting triggered with the following parameters with type: db *gorm.DB — returns &repository{db: db} implementing Repository interface
+    Repository --> Server : Returning Repository interface instance
+    deactivate Repository
+    Server -> Service : calling the NewService(repo repository.Repository) — initializing service struct with repo dependency
+    activate Service
+    Service -> Service : the NewService() is getting triggered with the following parameters with type: repo repository.Repository — returns &service{repo: repo} implementing Service interface
+    Service --> Server : Returning Service interface instance
+    deactivate Service
+    Server -> Handler : calling the NewHandler(service service.Service) — initializing handler struct with service dependency
+    activate Handler
+    Handler -> Handler : the NewHandler() is getting triggered with the following parameters with type: service service.Service — returns &handler{service: service} implementing HandlerInterface
+    Handler --> Server : Returning HandlerInterface instance
+    deactivate Handler
+    Server -> Server : Registering route router.HandleFunc("/enrollments", handler.GetAllEnrollments).Methods("GET")
+end
+
 Server -> Handler : calling the GetAllEnrollments(w http.ResponseWriter, r *http.Request)
 activate Handler
-Handler -> Handler : the GetAllEnrollments(w http.ResponseWriter, r *http.Request) is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
+Handler -> Handler : the GetAllEnrollments() is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
 
-group GetAllEnrollments(w http.ResponseWriter, r *http.Request)
-    Handler -> Handler : Extracting query parameter "course_name" from r.URL.Query().Get("course_name") and storing in variable courseName of type string
-    Handler -> Handler : Extracting query parameter "payment_status" from r.URL.Query().Get("payment_status") and storing in variable paymentStatus of type string
-    Handler -> Handler : Extracting query parameter "student_name" from r.URL.Query().Get("student_name") and storing in variable studentName of type string
+group GetAllEnrollments(w, r)
+    Handler -> Handler : Extracting query param "course_name" via r.URL.Query().Get("course_name") into courseName string
+    Handler -> Handler : Extracting query param "payment_status" via r.URL.Query().Get("payment_status") into paymentStatus string
+    Handler -> Handler : Extracting query param "student_name" via r.URL.Query().Get("student_name") into studentName string
     Handler -> Service : calling the GetEnrollments(courseName string, paymentStatus string, studentName string)
     activate Service
-    Service -> Service : the GetEnrollments(courseName string, paymentStatus string, studentName string) is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
+    Service -> Service : the GetEnrollments() is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
 
-    group GetEnrollments(courseName string, paymentStatus string, studentName string)
+    group GetEnrollments(courseName, paymentStatus, studentName)
         Service -> Repository : calling the FetchAllEnrollments(courseName string, paymentStatus string, studentName string)
         activate Repository
-        Repository -> Repository : the FetchAllEnrollments(courseName string, paymentStatus string, studentName string) is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
+        Repository -> Repository : the FetchAllEnrollments() is getting triggered with the following parameters with type: courseName string, paymentStatus string, studentName string
 
-        group FetchAllEnrollments(courseName string, paymentStatus string, studentName string)
-            Repository -> Repository : Declaring variable enrollments of type []models.Enrollment as an empty slice
-            Repository -> Repository : Building base query with r.db.Preload("Student").Preload("Course") to eager load Student and Course associations
+        group FetchAllEnrollments(courseName, paymentStatus, studentName)
+            Repository -> Repository : Initializing var enrollments []models.Enrollment as empty slice
+            Repository -> Repository : Building base query: r.db.Preload("Student").Preload("Course") — this tells GORM to eager load the Student and Course associations via separate SELECT queries after the main query
 
             alt courseName != ""
-                Repository -> Repository : Appending JOIN clause "JOIN courses ON courses.id = enrollments.course_id" and WHERE clause "courses.name ILIKE %" + courseName + "%" to the query
+                Repository -> Repository : Appending JOIN and WHERE: query.Joins("JOIN courses ON courses.id = enrollments.course_id").Where("courses.name ILIKE ?", "%"+courseName+"%") — ILIKE performs case-insensitive pattern matching with wildcard wrapping
             end
 
             alt paymentStatus != ""
-                Repository -> Repository : Appending WHERE clause "enrollments.payment_status = ?" with paymentStatus to the query
+                Repository -> Repository : Appending WHERE: query.Where("enrollments.payment_status = ?", paymentStatus) — exact match filter on payment_status column
             end
 
             alt studentName != ""
-                Repository -> Repository : Appending JOIN clause "JOIN students ON students.id = enrollments.student_id" and WHERE clause "students.name ILIKE %" + studentName + "%" to the query
+                Repository -> Repository : Appending JOIN and WHERE: query.Joins("JOIN students ON students.id = enrollments.student_id").Where("students.name ILIKE ?", "%"+studentName+"%") — ILIKE performs case-insensitive pattern matching with wildcard wrapping
             end
 
-            Repository -> DB : Executing query.Find(&enrollments) to fetch all matching enrollment records from the database
+            Repository -> DB : Executing query.Find(&enrollments) — SELECT * FROM enrollments [JOIN courses ...] [JOIN students ...] [WHERE ...] with GORM then running separate SELECTs for Preloaded Student and Course
             activate DB
-            DB --> Repository : Returning the result set of enrollment records with preloaded Student and Course data
+            DB --> Repository : Returning matched enrollment records with preloaded Student and Course data
             deactivate DB
-
-            alt err != nil (database query failed)
-                Repository --> Service : Returning nil and error from the database query failure
-            else err == nil (query succeeded)
-                Repository --> Service : Returning enrollments []models.Enrollment slice and nil error
-            end
         end
 
+        alt err != nil
+            Repository --> Service : Returning nil and database error
+        else success
+            Repository --> Service : Returning []models.Enrollment and nil error
+        end
         deactivate Repository
 
-        alt err != nil (repository returned error)
-            Service --> Handler : Returning nil and the error propagated from repository layer
-        else err == nil (enrollments fetched successfully)
-            Service -> Service : Creating responses variable of type []dto.EnrollmentResponse with length equal to len(enrollments) using make()
-            Service -> Service : Iterating over enrollments slice using for loop with index i and element e of type models.Enrollment
+        Service -> Service : Creating responses slice: make([]dto.EnrollmentResponse, len(enrollments))
 
-            loop for each enrollment e in enrollments
-                Service -> Service : Mapping enrollment fields to dto.EnrollmentResponse struct: ID = e.ID.String(), StudentName = e.Student.Name, StudentEmail = e.Student.Email, CourseName = e.Course.Name, CourseFee = e.Course.Fee, EnrollmentDate = e.EnrollmentDate, FeePaid = e.FeePaid, PaymentStatus = e.PaymentStatus
-                Service -> Service : Assigning the mapped EnrollmentResponse to responses[i]
-            end
-
-            Service --> Handler : Returning responses []dto.EnrollmentResponse and nil error
+        loop for i, e := range enrollments
+            Service -> Service : Mapping responses[i] = dto.EnrollmentResponse{ID: e.ID.String(), StudentName: e.Student.Name, StudentEmail: e.Student.Email, CourseName: e.Course.Name, CourseFee: e.Course.Fee, EnrollmentDate: e.EnrollmentDate, FeePaid: e.FeePaid, PaymentStatus: e.PaymentStatus}
         end
-    end
 
+        Service --> Handler : Returning []dto.EnrollmentResponse and nil error
+    end
     deactivate Service
 
-    alt err != nil (service returned error)
-        Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusInternalServerError int, err.Error() string, nil)
-        Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 500, Message = err.Error(), Data = empty slice, MissingFields = nil
-        Handler -> Handler : Setting response header Content-Type to "application/json"
-        Handler -> Handler : Writing HTTP status code 500 to the response writer using w.WriteHeader()
-        Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
-        Handler --> Client : HTTP 500 Internal Server Error with JSON error response body
-    else err == nil (enrollments retrieved successfully)
-        Handler -> Handler : calling respondWithSuccess(w http.ResponseWriter, http.StatusOK int, "Enrollments retrieved successfully" string, enrollments interface{})
-        Handler -> Handler : the respondWithSuccess function builds SuccessResponse struct with Status = 200, Message = "Enrollments retrieved successfully", Data = enrollments
-        Handler -> Handler : Setting response header Content-Type to "application/json"
-        Handler -> Handler : Writing HTTP status code 200 to the response writer using w.WriteHeader()
-        Handler -> Handler : Encoding the SuccessResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
-        Handler --> Client : HTTP 200 OK with JSON response body containing all enrollment records
+    alt err != nil
+        Handler --> Client : HTTP 500 with error message
+    else success
+        Handler --> Client : HTTP 200 with "Enrollments retrieved successfully" and enrollment list
     end
 end
 

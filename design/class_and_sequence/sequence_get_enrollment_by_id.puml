@@ -6,88 +6,82 @@ participant "pkg/server/server.go" as Server
 participant "internal/handlers/handler.go" as Handler
 participant "internal/service/service.go" as Service
 participant "internal/repository/repository.go" as Repository
-participant "internal/dto/enrollment_dto.go" as DTO
-participant "internal/models/model.go" as Models
 participant "Database" as DB
 
 activate Client
 Client -> Server : HTTP GET /enrollments/{id}
 activate Server
-Server -> Server : The mux.Router matches the route "/enrollments/{id}" with method GET
-Server -> Server : The router identifies the handler function handler.GetEnrollmentByID registered for this route
+
+group Constructor Initialization Chain
+    Server -> Server : Building dbURL using config.BuildDBUrl(*creds) and establishing DB connection via database.EstablishPostgresConnection(dbURL)
+    Server -> Repository : calling the NewRepository(db *gorm.DB) — initializing repository struct with db dependency
+    activate Repository
+    Repository -> Repository : the NewRepository() is getting triggered with the following parameters with type: db *gorm.DB — returns &repository{db: db} implementing Repository interface
+    Repository --> Server : Returning Repository interface instance
+    deactivate Repository
+    Server -> Service : calling the NewService(repo repository.Repository) — initializing service struct with repo dependency
+    activate Service
+    Service -> Service : the NewService() is getting triggered with the following parameters with type: repo repository.Repository — returns &service{repo: repo} implementing Service interface
+    Service --> Server : Returning Service interface instance
+    deactivate Service
+    Server -> Handler : calling the NewHandler(service service.Service) — initializing handler struct with service dependency
+    activate Handler
+    Handler -> Handler : the NewHandler() is getting triggered with the following parameters with type: service service.Service — returns &handler{service: service} implementing HandlerInterface
+    Handler --> Server : Returning HandlerInterface instance
+    deactivate Handler
+    Server -> Server : Registering route router.HandleFunc("/enrollments/{id}", handler.GetEnrollmentByID).Methods("GET")
+end
+
 Server -> Handler : calling the GetEnrollmentByID(w http.ResponseWriter, r *http.Request)
 activate Handler
-Handler -> Handler : the GetEnrollmentByID(w http.ResponseWriter, r *http.Request) is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
+Handler -> Handler : the GetEnrollmentByID() is getting triggered with the following parameters with type: w http.ResponseWriter, r *http.Request
 
-group GetEnrollmentByID(w http.ResponseWriter, r *http.Request)
-    Handler -> Handler : Extracting path variables from the request using mux.Vars(r) and storing in variable vars of type map[string]string
-    Handler -> Handler : Extracting the "id" key from vars map and storing in variable id of type string
+group GetEnrollmentByID(w, r)
+    Handler -> Handler : Calling mux.Vars(r) which parses the route template "/enrollments/{id}" and returns map[string]string with the captured path segments
+    Handler -> Handler : Extracting vars["id"] into variable id of type string
     Handler -> Service : calling the GetEnrollmentByID(id string)
     activate Service
-    Service -> Service : the GetEnrollmentByID(id string) is getting triggered with the following parameters with type: id string
+    Service -> Service : the GetEnrollmentByID() is getting triggered with the following parameters with type: id string
 
-    group GetEnrollmentByID(id string)
-        Service -> Service : Parsing the id string into a uuid.UUID using uuid.Parse(id) and storing in variable enrollmentID of type uuid.UUID and err of type error
+    group GetEnrollmentByID(id)
+        Service -> Service : Calling uuid.Parse(id) which validates the id string conforms to UUID format (8-4-4-4-12 hex pattern) and converts it to uuid.UUID type
 
-        alt err != nil (invalid UUID format)
-            Service --> Handler : Returning nil and errors.New("invalid enrollment ID")
-        else err == nil (valid UUID)
-            Service -> Repository : calling the FetchEnrollmentByID(enrollmentID uuid.UUID)
-            activate Repository
-            Repository -> Repository : the FetchEnrollmentByID(enrollmentID uuid.UUID) is getting triggered with the following parameters with type: enrollmentID uuid.UUID
+        alt err != nil (id string is not a valid UUID)
+            Service --> Handler : Returning error "invalid enrollment ID"
+        end
 
-            group FetchEnrollmentByID(enrollmentID uuid.UUID)
-                Repository -> Repository : Declaring variable enrollment of type models.Enrollment
-                Repository -> DB : Executing r.db.Preload("Student").Preload("Course").First(&enrollment, "id = ?", id) to fetch the enrollment record with preloaded associations
-                activate DB
-                DB --> Repository : Returning the enrollment record or error if not found
-                deactivate DB
+        Service -> Repository : calling the FetchEnrollmentByID(enrollmentID uuid.UUID)
+        activate Repository
+        Repository -> Repository : the FetchEnrollmentByID() is getting triggered with the following parameters with type: enrollmentID uuid.UUID
 
-                alt err != nil and errors.Is(err, gorm.ErrRecordNotFound)
-                    Repository --> Service : Returning nil and errors.New("enrollment not found")
-                else err != nil (other database error)
-                    Repository --> Service : Returning nil and the database error
-                else err == nil (record found)
-                    Repository --> Service : Returning &enrollment of type *models.Enrollment and nil error
-                end
-            end
+        group FetchEnrollmentByID(enrollmentID)
+            Repository -> Repository : Declaring var enrollment models.Enrollment
+            Repository -> DB : Executing r.db.Preload("Student").Preload("Course").First(&enrollment, "id = ?", id) — this runs SELECT * FROM enrollments WHERE id = ? LIMIT 1, then GORM runs SELECT * FROM students WHERE id = ? and SELECT * FROM courses WHERE id = ? to populate the associations
+            activate DB
+            DB --> Repository : Returning enrollment record with populated Student and Course structs, or gorm.ErrRecordNotFound
+            deactivate DB
 
-            deactivate Repository
-
-            alt err != nil (repository returned error)
-                Service --> Handler : Returning nil and the error from repository
-            else err == nil (enrollment found)
-                Service -> Service : Building dto.EnrollmentResponse struct with fields: ID = enrollment.ID.String(), StudentName = enrollment.Student.Name, StudentEmail = enrollment.Student.Email, CourseName = enrollment.Course.Name, CourseFee = enrollment.Course.Fee, EnrollmentDate = enrollment.EnrollmentDate, FeePaid = enrollment.FeePaid, PaymentStatus = enrollment.PaymentStatus
-                Service --> Handler : Returning &dto.EnrollmentResponse and nil error
+            alt errors.Is(err, gorm.ErrRecordNotFound)
+                Repository --> Service : Returning nil and errors.New("enrollment not found")
+            else err != nil (other DB error)
+                Repository --> Service : Returning nil and database error
+            else success
+                Repository --> Service : Returning &enrollment *models.Enrollment and nil error
             end
         end
-    end
+        deactivate Repository
 
+        Service -> Service : Mapping to dto.EnrollmentResponse{ID: enrollment.ID.String(), StudentName: enrollment.Student.Name, StudentEmail: enrollment.Student.Email, CourseName: enrollment.Course.Name, CourseFee: enrollment.Course.Fee, EnrollmentDate: enrollment.EnrollmentDate, FeePaid: enrollment.FeePaid, PaymentStatus: enrollment.PaymentStatus}
+        Service --> Handler : Returning *dto.EnrollmentResponse and nil error
+    end
     deactivate Service
 
-    alt err != nil
-        alt err.Error() == "enrollment not found"
-            Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusNotFound int, err.Error() string, nil)
-            Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 404, Message = "enrollment not found", Data = empty slice, MissingFields = nil
-            Handler -> Handler : Setting response header Content-Type to "application/json"
-            Handler -> Handler : Writing HTTP status code 404 to the response writer using w.WriteHeader()
-            Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
-            Handler --> Client : HTTP 404 Not Found with JSON error response body
-        else other error
-            Handler -> Handler : calling respondWithError(w http.ResponseWriter, http.StatusBadRequest int, err.Error() string, nil)
-            Handler -> Handler : the respondWithError function builds ErrorResponse struct with Status = 400, Message = err.Error(), Data = empty slice, MissingFields = nil
-            Handler -> Handler : Setting response header Content-Type to "application/json"
-            Handler -> Handler : Writing HTTP status code 400 to the response writer using w.WriteHeader()
-            Handler -> Handler : Encoding the ErrorResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
-            Handler --> Client : HTTP 400 Bad Request with JSON error response body
-        end
-    else err == nil (enrollment retrieved successfully)
-        Handler -> Handler : calling respondWithSuccess(w http.ResponseWriter, http.StatusOK int, "Enrollment retrieved successfully" string, enrollment interface{})
-        Handler -> Handler : the respondWithSuccess function builds SuccessResponse struct with Status = 200, Message = "Enrollment retrieved successfully", Data = enrollment
-        Handler -> Handler : Setting response header Content-Type to "application/json"
-        Handler -> Handler : Writing HTTP status code 200 to the response writer using w.WriteHeader()
-        Handler -> Handler : Encoding the SuccessResponse struct to JSON and writing to the response writer using json.NewEncoder(w).Encode()
-        Handler --> Client : HTTP 200 OK with JSON response body containing the enrollment record
+    alt err.Error() == "enrollment not found"
+        Handler --> Client : HTTP 404 with "enrollment not found"
+    else other error
+        Handler --> Client : HTTP 400 with error message
+    else success
+        Handler --> Client : HTTP 200 with "Enrollment retrieved successfully" and enrollment data
     end
 end
 
